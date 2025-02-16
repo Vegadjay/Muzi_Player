@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { database } from "@/lib/firebase";
 import { ref, set } from "firebase/database";
@@ -12,26 +12,38 @@ import toast from "react-hot-toast";
 
 export function RoomCreation() {
   const [roomId, setRoomId] = useState("");
+  const [isMounted, setIsMounted] = useState(false);
   const router = useRouter();
 
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
   const createRoom = async () => {
+    if (!isMounted) return;
+
     const newRoomId = Math.random().toString(36).substring(2, 8);
 
-    // Save room details in Firebase with host flag
-    await set(ref(database, `rooms/${newRoomId}`), {
-      videoId: "",
-      isPlaying: false,
-      currentTime: 0,
-      lastUpdate: Date.now(),
-      host: true // Using boolean flag for host
-    });
+    try {
+      await set(ref(database, `rooms/${newRoomId}`), {
+        videoId: "",
+        isPlaying: false,
+        currentTime: 0,
+        lastUpdate: Date.now(),
+        host: true
+      });
 
-    // Store host status in localStorage
-    localStorage.setItem("isHost", "true");
-    router.push(`/room/${newRoomId}`);
+      localStorage.setItem("isHost", "true");
+      router.push(`/room/${newRoomId}`);
+    } catch (error) {
+      console.error("Failed to create room:", error);
+      toast.error("Failed to create room. Please try again.");
+    }
   };
 
   const joinRoom = () => {
+    if (!isMounted) return;
+
     if (roomId.trim()) {
       localStorage.setItem("isHost", "false");
       router.push(`/room/${roomId.trim()}`);
@@ -39,6 +51,10 @@ export function RoomCreation() {
       toast.error("Please enter a valid room code.");
     }
   };
+
+  if (!isMounted) {
+    return null;
+  }
 
   return (
     <Card className="p-6 max-w-md mx-auto">

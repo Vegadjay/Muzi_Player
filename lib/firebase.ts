@@ -1,16 +1,18 @@
-import { initializeApp } from 'firebase/app';
-import { getDatabase } from 'firebase/database';
+import { initializeApp } from "firebase/app";
+import { getDatabase, Database } from "firebase/database";
 
+// Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyDr9tmAB03fnSAQwimMPkE-o_Q-jMAWzZE",
-  authDomain: "muzi-app-65c2a.firebaseapp.com",
-  projectId: "muzi-app-65c2a",
-  storageBucket: "muzi-app-65c2a.firebasestorage.app",
-  messagingSenderId: "659045825066",
-  appId: "1:659045825066:web:d09cd4a13e045109dde153",
-  measurementId: "G-487SDHS8K0"
+  apiKey: "AIzaSyCvqJWZoIGudfxWzgadwO1w80Yq9gPnrSw",
+  authDomain: "trialaccount-36589.firebaseapp.com",
+  databaseURL: "https://trialaccount-36589-default-rtdb.firebaseio.com",
+  projectId: "trialaccount-36589",
+  storageBucket: "trialaccount-36589.firebasestorage.app",
+  messagingSenderId: "201415507837",
+  appId: "1:201415507837:web:b1888508b26f0692921614",
+  measurementId: "G-7YW3WTNBTL"
 };
 
-
 const app = initializeApp(firebaseConfig);
-export const database = getDatabase(app);
+
+export const database: Database = getDatabase(app);

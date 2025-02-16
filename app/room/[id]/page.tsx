@@ -4,12 +4,16 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { database } from "@/lib/firebase";
 import { ref, onValue, set } from "firebase/database";
-import ReactPlayer from "react-player";
+import dynamicImport from "next/dynamic";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Play, Pause, Copy, Loader2 } from "lucide-react";
+import ReactPlayer from "react-player";
 import toast from "react-hot-toast";
+import { debounce } from "lodash";
+
+export const dynamic = "force-dynamic";
 
 interface RoomData {
   videoId: string;
@@ -19,19 +23,31 @@ interface RoomData {
   host: boolean;
 }
 
-export const dynamic = "force-dynamic";
+export const dynamicConfig = "force-dynamic";
 
 export default function Room() {
   const { id } = useParams();
   const [videoUrl, setVideoUrl] = useState("");
   const [roomData, setRoomData] = useState<RoomData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isHost, setIsHost] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
   const playerRef = useRef<ReactPlayer>(null);
   const lastUpdateRef = useRef<number>(0);
   const isUpdatingRef = useRef(false);
+  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Get host status from localStorage
-  const isHost = localStorage.getItem("isHost") === "true";
+  useEffect(() => {
+    setIsMounted(true);
+    if (typeof window !== "undefined") {
+      setIsHost(localStorage.getItem("isHost") === "true");
+    }
+    return () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!id) return;
@@ -39,35 +55,59 @@ export default function Room() {
     const roomRef = ref(database, `rooms/${id}`);
     const unsubscribe = onValue(roomRef, (snapshot) => {
       const data = snapshot.val();
-      if (data) {
+      if (data && isMounted) {
         setRoomData(data);
         if (data.lastUpdate !== lastUpdateRef.current && playerRef.current) {
-          playerRef.current.seekTo(data.currentTime);
-          if (playerRef.current && data.isPlaying !== playerRef.current.props.playing) {
-            isUpdatingRef.current = true;
-            setTimeout(() => {
-              isUpdatingRef.current = false;
-            }, 100);
+          // Clear any existing sync timeout
+          if (syncTimeoutRef.current) {
+            clearTimeout(syncTimeoutRef.current);
           }
+
+          // Set a new timeout for sync
+          syncTimeoutRef.current = setTimeout(() => {
+            if (playerRef.current) {
+              const currentTime = playerRef.current.getCurrentTime();
+              const timeDiff = Math.abs(currentTime - data.currentTime);
+
+              // Only seek if the time difference is more than 2 seconds
+              if (timeDiff > 2) {
+                playerRef.current.seekTo(data.currentTime, "seconds");
+              }
+
+              // Update play state
+              if (data.isPlaying !== playerRef.current.props.playing) {
+                isUpdatingRef.current = true;
+                setTimeout(() => {
+                  isUpdatingRef.current = false;
+                }, 1000);
+              }
+            }
+          }, 500);
         }
       }
       setIsLoading(false);
     });
 
-    return () => unsubscribe();
-  }, [id]);
+    return () => {
+      unsubscribe();
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    };
+  }, [id, isMounted]);
 
   const updateRoomState = useCallback(
-    async (updates: Partial<RoomData>) => {
+    debounce(async (updates: Partial<RoomData>) => {
       if (!id || isUpdatingRef.current || !isHost) return;
       try {
         const roomRef = ref(database, `rooms/${id}`);
         lastUpdateRef.current = Date.now();
         await set(roomRef, { ...roomData, ...updates, lastUpdate: lastUpdateRef.current });
       } catch (error) {
+        console.error("Update failed:", error);
         toast.error("Failed to update room state");
       }
-    },
+    }, 500),
     [id, roomData, isHost]
   );
 
@@ -80,11 +120,14 @@ export default function Room() {
     updateRoomState({ isPlaying: !roomData?.isPlaying });
   }, [roomData?.isPlaying, updateRoomState, isHost]);
 
-  const handleProgress = ({ playedSeconds }: { playedSeconds: number }) => {
-    if (roomData?.isPlaying && Date.now() - lastUpdateRef.current > 1000 && isHost) {
-      updateRoomState({ currentTime: playedSeconds });
-    }
-  };
+  const handleProgress = useCallback(
+    debounce(({ playedSeconds }: { playedSeconds: number }) => {
+      if (roomData?.isPlaying && Date.now() - lastUpdateRef.current > 2000 && isHost) {
+        updateRoomState({ currentTime: playedSeconds });
+      }
+    }, 2000),
+    [roomData?.isPlaying, updateRoomState, isHost]
+  );
 
   const handleVideoSubmit = async () => {
     if (!isHost) {
@@ -92,14 +135,26 @@ export default function Room() {
       return;
     }
 
-    if (!videoUrl.includes("v=")) {
-      toast.error("Invalid YouTube URL");
-      return;
+    try {
+      const videoId = getYouTubeId(videoUrl);
+      if (!videoId) {
+        toast.error("Invalid YouTube URL");
+        return;
+      }
+
+      updateRoomState({ videoId, currentTime: 0, isPlaying: false });
+      setVideoUrl("");
+      toast.success("Video loaded successfully!");
+    } catch (error) {
+      console.error("Video load error:", error);
+      toast.error("Failed to load video");
     }
-    const videoId = videoUrl.split("v=")[1]?.split("&")[0];
-    updateRoomState({ videoId, currentTime: 0, isPlaying: false });
-    setVideoUrl("");
-    toast.success("Video loaded successfully!");
+  };
+
+  const getYouTubeId = (url: string) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
   };
 
   const copyRoomLink = () => {
@@ -107,7 +162,7 @@ export default function Room() {
     toast.success("Room link copied!");
   };
 
-  if (isLoading) {
+  if (isLoading || !isMounted) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin" />
@@ -148,7 +203,7 @@ export default function Room() {
               <div className="aspect-video bg-black rounded-lg overflow-hidden">
                 <ReactPlayer
                   ref={playerRef}
-                  url={`https://www.youtube.com/watch?v=${roomData.videoId}`}
+                  url={`https://www.youtube.com/embed/${roomData.videoId}`}
                   width="100%"
                   height="100%"
                   playing={roomData.isPlaying}
@@ -156,6 +211,22 @@ export default function Room() {
                   onPlay={() => !isUpdatingRef.current && handlePlayPause()}
                   onPause={() => !isUpdatingRef.current && handlePlayPause()}
                   onProgress={handleProgress}
+                  onError={(error) => console.error("Player error:", error)}
+                  playsinline
+                  config={{
+                    youtube: {
+                      playerVars: {
+                        playsinline: 1,
+                        modestbranding: 1,
+                        origin: typeof window !== 'undefined' ? window.location.origin : '',
+                        enablejsapi: 1,
+                        rel: 0
+                      },
+                      embedOptions: {
+                        host: 'https://www.youtube-nocookie.com'
+                      }
+                    }
+                  }}
                 />
               </div>
               {isHost && (
