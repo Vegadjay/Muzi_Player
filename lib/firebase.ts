@@ -1,18 +1,19 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase, Database } from "firebase/database";
 
-// Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyCvqJWZoIGudfxWzgadwO1w80Yq9gPnrSw",
-  authDomain: "trialaccount-36589.firebaseapp.com",
-  databaseURL: "https://trialaccount-36589-default-rtdb.firebaseio.com",
-  projectId: "trialaccount-36589",
-  storageBucket: "trialaccount-36589.firebasestorage.app",
-  messagingSenderId: "201415507837",
-  appId: "1:201415507837:web:b1888508b26f0692921614",
-  measurementId: "G-7YW3WTNBTL"
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = initializeApp(firebaseConfig);
+if (!firebaseConfig.apiKey) {
+  throw new Error("Firebase API Key is missing! Check your .env file.");
+}
 
+const app = initializeApp(firebaseConfig);
 export const database: Database = getDatabase(app);
