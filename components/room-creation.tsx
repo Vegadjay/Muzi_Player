@@ -30,6 +30,7 @@ export function RoomCreation() {
         isPlaying: false,
         currentTime: 0,
         lastUpdate: Date.now(),
+        lastPlayingUpdate: Date.now(),
         host: true
       });
 

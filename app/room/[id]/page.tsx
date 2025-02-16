@@ -1,10 +1,10 @@
+// Room.tsx
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { database } from "@/lib/firebase";
 import { ref, onValue, set } from "firebase/database";
-import dynamicImport from "next/dynamic";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,8 +23,6 @@ interface RoomData {
   host: boolean;
 }
 
-export const dynamicConfig = "force-dynamic";
-
 export default function Room() {
   const { id } = useParams();
   const [videoUrl, setVideoUrl] = useState("");
@@ -32,21 +30,27 @@ export default function Room() {
   const [isLoading, setIsLoading] = useState(true);
   const [isHost, setIsHost] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
   const playerRef = useRef<ReactPlayer>(null);
   const lastUpdateRef = useRef<number>(0);
   const isUpdatingRef = useRef(false);
-  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsVisible(!document.hidden);
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     setIsMounted(true);
     if (typeof window !== "undefined") {
       setIsHost(localStorage.getItem("isHost") === "true");
     }
-    return () => {
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current);
-      }
-    };
   }, []);
 
   useEffect(() => {
@@ -56,77 +60,70 @@ export default function Room() {
     const unsubscribe = onValue(roomRef, (snapshot) => {
       const data = snapshot.val();
       if (data && isMounted) {
-        setRoomData(data);
-        if (data.lastUpdate !== lastUpdateRef.current && playerRef.current) {
-          // Clear any existing sync timeout
-          if (syncTimeoutRef.current) {
-            clearTimeout(syncTimeoutRef.current);
-          }
+        // Only update if there's an actual change
+        if (JSON.stringify(data) !== JSON.stringify(roomData)) {
+          setRoomData(data);
 
-          // Set a new timeout for sync
-          syncTimeoutRef.current = setTimeout(() => {
-            if (playerRef.current) {
-              const currentTime = playerRef.current.getCurrentTime();
-              const timeDiff = Math.abs(currentTime - data.currentTime);
+          if (data.lastUpdate !== lastUpdateRef.current && playerRef.current) {
+            const currentTime = playerRef.current.getCurrentTime();
+            const timeDiff = Math.abs(currentTime - data.currentTime);
 
-              // Only seek if the time difference is more than 2 seconds
-              if (timeDiff > 2) {
-                playerRef.current.seekTo(data.currentTime, "seconds");
-              }
-
-              // Update play state
-              if (data.isPlaying !== playerRef.current.props.playing) {
-                isUpdatingRef.current = true;
-                setTimeout(() => {
-                  isUpdatingRef.current = false;
-                }, 1000);
-              }
+            if (timeDiff > 2) {
+              playerRef.current.seekTo(data.currentTime, "seconds");
             }
-          }, 500);
+            lastUpdateRef.current = data.lastUpdate;
+          }
         }
       }
       setIsLoading(false);
     });
 
-    return () => {
-      unsubscribe();
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current);
-      }
-    };
-  }, [id, isMounted]);
+    return () => unsubscribe();
+  }, [id, isMounted, roomData]);
 
-  const updateRoomState = useCallback(
-    debounce(async (updates: Partial<RoomData>) => {
-      if (!id || isUpdatingRef.current || !isHost) return;
-      try {
-        const roomRef = ref(database, `rooms/${id}`);
-        lastUpdateRef.current = Date.now();
-        await set(roomRef, { ...roomData, ...updates, lastUpdate: lastUpdateRef.current });
-      } catch (error) {
-        console.error("Update failed:", error);
-        toast.error("Failed to update room state");
-      }
-    }, 500),
-    [id, roomData, isHost]
-  );
+  const updateRoomState = useCallback(async (updates: Partial<RoomData>) => {
+    if (!id || !isHost || isUpdatingRef.current) return;
 
-  const handlePlayPause = useCallback(() => {
+    try {
+      isUpdatingRef.current = true;
+      const roomRef = ref(database, `rooms/${id}`);
+      const now = Date.now();
+
+      await set(roomRef, {
+        ...roomData,
+        ...updates,
+        lastUpdate: now
+      });
+
+      lastUpdateRef.current = now;
+    } catch (error) {
+      console.error("Update failed:", error);
+      toast.error("Failed to update room state");
+    } finally {
+      setTimeout(() => {
+        isUpdatingRef.current = false;
+      }, 500);
+    }
+  }, [id, roomData, isHost]);
+
+  const handlePlayPause = useCallback(async () => {
     if (!isHost) {
       toast.error("Only the host can control playback");
       return;
     }
+
     if (isUpdatingRef.current) return;
-    updateRoomState({ isPlaying: !roomData?.isPlaying });
+
+    await updateRoomState({ isPlaying: !roomData?.isPlaying });
   }, [roomData?.isPlaying, updateRoomState, isHost]);
 
   const handleProgress = useCallback(
     debounce(({ playedSeconds }: { playedSeconds: number }) => {
-      if (roomData?.isPlaying && Date.now() - lastUpdateRef.current > 2000 && isHost) {
+      if (roomData?.isPlaying && isHost && isVisible) {
         updateRoomState({ currentTime: playedSeconds });
       }
     }, 2000),
-    [roomData?.isPlaying, updateRoomState, isHost]
+    [roomData?.isPlaying, updateRoomState, isHost, isVisible]
   );
 
   const handleVideoSubmit = async () => {
@@ -142,7 +139,11 @@ export default function Room() {
         return;
       }
 
-      updateRoomState({ videoId, currentTime: 0, isPlaying: false });
+      await updateRoomState({
+        videoId,
+        currentTime: 0,
+        isPlaying: false
+      });
       setVideoUrl("");
       toast.success("Video loaded successfully!");
     } catch (error) {
@@ -203,16 +204,23 @@ export default function Room() {
               <div className="aspect-video bg-black rounded-lg overflow-hidden">
                 <ReactPlayer
                   ref={playerRef}
-                  url={`https://www.youtube.com/embed/${roomData.videoId}`}
+                  url={`https://www.youtube.com/watch?v=${roomData.videoId}`}
                   width="100%"
                   height="100%"
-                  playing={roomData.isPlaying}
+                  playing={roomData.isPlaying && isVisible}
                   controls={isHost}
-                  onPlay={() => !isUpdatingRef.current && handlePlayPause()}
-                  onPause={() => !isUpdatingRef.current && handlePlayPause()}
+                  onPlay={() => {
+                    if (!isUpdatingRef.current && !roomData.isPlaying && isHost) {
+                      handlePlayPause();
+                    }
+                  }}
+                  onPause={() => {
+                    if (!isUpdatingRef.current && roomData.isPlaying && isHost) {
+                      handlePlayPause();
+                    }
+                  }}
                   onProgress={handleProgress}
                   onError={(error) => console.error("Player error:", error)}
-                  playsinline
                   config={{
                     youtube: {
                       playerVars: {
@@ -220,10 +228,8 @@ export default function Room() {
                         modestbranding: 1,
                         origin: typeof window !== 'undefined' ? window.location.origin : '',
                         enablejsapi: 1,
-                        rel: 0
-                      },
-                      embedOptions: {
-                        host: 'https://www.youtube-nocookie.com'
+                        rel: 0,
+                        controls: isHost ? 1 : 0
                       }
                     }
                   }}
