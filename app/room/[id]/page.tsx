@@ -59,7 +59,6 @@ export default function Room() {
     const unsubscribe = onValue(roomRef, (snapshot) => {
       const data = snapshot.val();
       if (data && isMounted) {
-        // Only update if there's an actual change
         if (JSON.stringify(data) !== JSON.stringify(roomData)) {
           setRoomData(data);
 
